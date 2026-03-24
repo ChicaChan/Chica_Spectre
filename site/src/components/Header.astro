@@ -1,0 +1,79 @@
+---
+import { SITE_TITLE } from '../consts';
+
+const pathname = Astro.url.pathname;
+---
+
+<header class="site-header">
+	<nav class="site-nav">
+		<a class="brand" href="/">[{SITE_TITLE}]</a>
+		<div class="links">
+			<a href="/" class:list={{ active: pathname === '/' }}>首页</a>
+			<span>/</span>
+			<a href="/blog" class:list={{ active: pathname.startsWith('/blog') }}>博客</a>
+			<span>/</span>
+			<a href="/insights" class:list={{ active: pathname.startsWith('/insights') }}>仪表盘</a>
+			<span>/</span>
+			<a href="/about" class:list={{ active: pathname.startsWith('/about') }}>关于</a>
+			<span>/</span>
+			<a href="/admin/" target="_blank" rel="noreferrer">CMS</a>
+		</div>
+	</nav>
+</header>
+
+<style>
+	.site-header {
+		position: sticky;
+		top: 0;
+		z-index: 20;
+		backdrop-filter: blur(8px);
+		background: rgba(11, 11, 16, 0.88);
+		border-bottom: 1px solid var(--border);
+	}
+
+	.site-nav {
+		width: min(1120px, calc(100% - 2rem));
+		margin: 0 auto;
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		padding: 0.85rem 0;
+		gap: 1rem;
+	}
+
+	.brand {
+		color: var(--text);
+		font-weight: 700;
+		letter-spacing: 0.03em;
+		text-decoration: none;
+	}
+
+	.links {
+		display: flex;
+		align-items: center;
+		gap: 0.6rem;
+		flex-wrap: wrap;
+		color: var(--muted);
+	}
+
+	.links a {
+		color: var(--text);
+		padding: 0.2rem 0.45rem;
+	}
+
+	.links a:hover,
+	.links a.active {
+		color: white;
+		background: var(--primary);
+		text-decoration: none;
+	}
+
+	@media (max-width: 860px) {
+		.site-nav {
+			width: min(1120px, calc(100% - 1rem));
+			flex-direction: column;
+			align-items: flex-start;
+			gap: 0.55rem;
+		}
+	}
+</style>

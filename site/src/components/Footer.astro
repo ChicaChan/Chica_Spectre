@@ -1,0 +1,45 @@
+---
+const year = new Date().getFullYear();
+---
+
+<footer class="site-footer">
+	<div class="footer-inner">
+		<p>© {year} Chica 中文博客 · Spectre 风格改造版</p>
+		<p>
+			<a href="/rss.xml">RSS</a>
+			<span> · </span>
+			<a href="/insights">仪表盘镜像</a>
+			<span> · </span>
+			<a href="/admin/" target="_blank" rel="noreferrer">CMS 后台</a>
+		</p>
+	</div>
+</footer>
+
+<style>
+	.site-footer {
+		border-top: 1px solid var(--border);
+		margin-top: 1.5rem;
+	}
+
+	.footer-inner {
+		width: min(1120px, calc(100% - 2rem));
+		margin: 0 auto;
+		padding: 1.4rem 0 2rem;
+	}
+
+	.footer-inner p {
+		margin: 0;
+		color: var(--muted);
+	}
+
+	.footer-inner p + p {
+		margin-top: 0.25rem;
+	}
+
+	@media (max-width: 860px) {
+		.footer-inner {
+			width: min(1120px, calc(100% - 1rem));
+			padding-bottom: 1.4rem;
+		}
+	}
+</style>

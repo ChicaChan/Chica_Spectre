@@ -1,0 +1,361 @@
+---
+import BaseHead from '../../components/BaseHead.astro';
+import Footer from '../../components/Footer.astro';
+import FormattedDate from '../../components/FormattedDate.astro';
+import Header from '../../components/Header.astro';
+import { getPostBySlug, formatPostDate } from '../../lib/cms';
+import { marked } from 'marked';
+import 'katex/dist/katex.min.css';
+
+const slug = Astro.params.slug ?? '';
+const post = await getPostBySlug(slug);
+const postDate = post ? formatPostDate(post) : null;
+const rawContent = post?.content ?? '';
+
+function protectMathSegments(markdown: string) {
+	const segments: string[] = [];
+	const stash = (full: string) => {
+		const idx = segments.push(full) - 1;
+		return `@@MATH_${idx}@@`;
+	};
+
+	const protectedMarkdown = markdown
+		.replace(/\\\[[\s\S]*?\\\]/g, stash)
+		.replace(/\\\([\s\S]*?\\\)/g, stash)
+		.replace(/\$\$[\s\S]*?\$\$/g, stash)
+		.replace(/(?<!\\)\$[^\n$]+(?<!\\)\$/g, stash);
+
+	return { protectedMarkdown, segments };
+}
+
+function restoreMathSegments(renderedHtml: string, segments: string[]) {
+	return renderedHtml.replace(/@@MATH_(\d+)@@/g, (_, idx) => segments[Number(idx)] ?? '');
+}
+
+type TocItem = {
+	id: string;
+	text: string;
+	level: number;
+};
+
+function decodeHtmlEntities(value: string) {
+	return value
+		.replace(/&nbsp;/g, ' ')
+		.replace(/&amp;/g, '&')
+		.replace(/&lt;/g, '<')
+		.replace(/&gt;/g, '>')
+		.replace(/&quot;/g, '"')
+		.replace(/&#39;/g, "'");
+}
+
+function toSlug(value: string) {
+	const cleaned = decodeHtmlEntities(value)
+		.toLowerCase()
+		.trim()
+		.replace(/[^\p{Letter}\p{Number}\s-]/gu, '')
+		.replace(/\s+/g, '-')
+		.replace(/-+/g, '-')
+		.replace(/^-|-$/g, '');
+	return cleaned || 'section';
+}
+
+function addAnchorsAndBuildToc(html: string) {
+	const toc: TocItem[] = [];
+	const usedIds = new Map<string, number>();
+
+	const nextUniqueId = (rawId: string) => {
+		const base = rawId || 'section';
+		const count = usedIds.get(base) ?? 0;
+		usedIds.set(base, count + 1);
+		return count === 0 ? base : `${base}-${count + 1}`;
+	};
+
+	const contentWithAnchors = html.replace(
+		/<h([2-4])([^>]*)>([\s\S]*?)<\/h\1>/gi,
+		(full, levelRaw, attrsRaw, innerHtml) => {
+			const level = Number(levelRaw);
+			const plainText = decodeHtmlEntities(innerHtml.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim());
+			if (!plainText) return full;
+
+			const quotedId = attrsRaw.match(/\sid=(['"])(.*?)\1/i);
+			const bareId = attrsRaw.match(/\sid=([^\s>]+)/i);
+			const existingId = quotedId?.[2] ?? bareId?.[1] ?? '';
+			const finalId = nextUniqueId(existingId || toSlug(plainText));
+
+			const attrsWithoutId = attrsRaw
+				.replace(/\s+id=(['"]).*?\1/gi, '')
+				.replace(/\s+id=[^\s>]+/gi, '');
+
+			if (level <= 3) {
+				toc.push({ id: finalId, text: plainText, level });
+			}
+			return `<h${level}${attrsWithoutId} id="${finalId}">${innerHtml}</h${level}>`;
+		},
+	);
+
+	return { contentWithAnchors, toc };
+}
+
+const looksLikeHtml = /<(p|div|h1|h2|h3|h4|h5|h6|ul|ol|li|table|tr|td|th|img|figure|blockquote|pre|code|br)\b/i.test(
+	rawContent,
+);
+let renderedContent = rawContent;
+if (!looksLikeHtml) {
+	const { protectedMarkdown, segments } = protectMathSegments(rawContent);
+	const html = marked.parse(protectedMarkdown, {
+		gfm: true,
+		breaks: true,
+	}) as string;
+	renderedContent = restoreMathSegments(html, segments);
+}
+const { contentWithAnchors, toc } = addAnchorsAndBuildToc(renderedContent);
+renderedContent = contentWithAnchors;
+
+if (!post) {
+	return Astro.redirect('/blog/');
+}
+---
+
+<!doctype html>
+<html lang="zh-CN">
+	<head>
+		<BaseHead title={post.title} description={post.excerpt ?? post.title} />
+	</head>
+	<body>
+		<Header />
+		<main class="article-main">
+			<div class={`article-layout${toc.length > 0 ? ' with-toc' : ''}`}>
+				<article class="card article">
+					<p class="label">Post Detail</p>
+					<h1>{post.title}</h1>
+					{postDate && (
+						<p class="meta">
+							<FormattedDate date={postDate} />
+						</p>
+					)}
+					{post.excerpt && <p class="excerpt">{post.excerpt}</p>}
+					{
+						post.content ? (
+							<div class="content markdown" set:html={renderedContent} />
+						) : (
+							<div class="content">暂无正文内容。</div>
+						)
+					}
+					<hr />
+					<p>
+						<a class="back-link" href="/blog/">← 返回博客列表</a>
+					</p>
+				</article>
+				{
+					toc.length > 0 && (
+						<aside class="card toc" aria-label="文章目录">
+							<p class="label">目录</p>
+							<nav>
+								<ul>
+									{
+										toc.map((item) => (
+											<li class={`level-${item.level}`}>
+												<a href={`#${item.id}`}>{item.text}</a>
+											</li>
+										))
+									}
+								</ul>
+							</nav>
+						</aside>
+					)
+				}
+			</div>
+		</main>
+		<Footer />
+		<script>
+			import renderMathInElement from 'katex/contrib/auto-render';
+
+			const target = document.querySelector('.content.markdown');
+			if (target) {
+				renderMathInElement(target, {
+					delimiters: [
+						{ left: '$$', right: '$$', display: true },
+						{ left: '\\[', right: '\\]', display: true },
+						{ left: '$', right: '$', display: false },
+						{ left: '\\(', right: '\\)', display: false },
+					],
+					throwOnError: false,
+					strict: 'ignore',
+					ignoredTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code'],
+				});
+			}
+		</script>
+	</body>
+</html>
+
+<style>
+	.article-main {
+		width: min(1240px, calc(100% - 2rem));
+		margin: 0 auto;
+		padding: 2rem 0 2.5rem;
+	}
+
+	.article-layout {
+		display: block;
+	}
+
+	.article-layout.with-toc {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) 280px;
+		gap: 1rem;
+		align-items: start;
+	}
+
+	.article {
+		max-width: 860px;
+		margin: 0 auto;
+	}
+
+	.article-layout.with-toc .article {
+		max-width: none;
+		margin: 0;
+	}
+
+	.toc {
+		position: sticky;
+		top: 5.4rem;
+		max-height: calc(100vh - 6rem);
+		overflow: auto;
+		padding: 0.9rem;
+	}
+
+	.toc nav ul {
+		list-style: none;
+		margin: 0;
+		padding: 0;
+	}
+
+	.toc nav li {
+		margin: 0.2rem 0;
+	}
+
+	.toc nav li.level-3 {
+		padding-left: 0.75rem;
+	}
+
+	.toc nav a {
+		display: block;
+		font-size: 0.88rem;
+		line-height: 1.45;
+		color: var(--muted);
+		border-left: 2px solid transparent;
+		padding: 0.2rem 0.2rem 0.2rem 0.55rem;
+	}
+
+	.toc nav a:hover,
+	.toc nav a:focus-visible {
+		border-left-color: var(--primary);
+		color: var(--text);
+		background: rgba(140, 92, 245, 0.14);
+		text-decoration: none;
+	}
+
+	.excerpt {
+		font-size: 1.03rem;
+		color: var(--text);
+	}
+
+	.content {
+		color: var(--muted);
+	}
+
+	.markdown :global(h2),
+	.markdown :global(h3),
+	.markdown :global(h4) {
+		margin-top: 1.2rem;
+	}
+
+	.markdown :global(h2[id]),
+	.markdown :global(h3[id]),
+	.markdown :global(h4[id]) {
+		scroll-margin-top: 5.8rem;
+	}
+
+	.markdown :global(p) {
+		margin-bottom: 0.9rem;
+	}
+
+	.markdown :global(ul),
+	.markdown :global(ol) {
+		padding-left: 1.2rem;
+		margin: 0 0 1rem;
+	}
+
+	.markdown :global(table) {
+		border-collapse: collapse;
+		display: block;
+		width: max-content;
+		max-width: 100%;
+		margin: 1rem 0;
+		overflow-x: auto;
+		font-size: 0.92rem;
+	}
+
+	.markdown :global(th),
+	.markdown :global(td) {
+		border-bottom: 1px solid var(--border);
+		padding: 0.5rem 0.4rem;
+		text-align: left;
+		white-space: nowrap;
+	}
+
+	.markdown :global(pre) {
+		max-width: 100%;
+		max-height: 28rem;
+		overflow: auto;
+	}
+
+	.markdown :global(.katex-display) {
+		max-width: 100%;
+		overflow-x: auto;
+		overflow-y: hidden;
+		padding: 0.15rem 0;
+	}
+
+	.markdown :global(p),
+	.markdown :global(li),
+	.markdown :global(blockquote) {
+		overflow-wrap: anywhere;
+	}
+
+	.markdown :global(img) {
+		display: block;
+		max-width: 100%;
+		height: auto;
+		border: 1px solid var(--border);
+		margin: 1rem 0;
+	}
+
+	.back-link {
+		padding: 0.2rem 0.45rem;
+	}
+
+	.back-link:hover,
+	.back-link:focus-visible {
+		background: var(--primary);
+		color: white;
+		text-decoration: none;
+	}
+
+	@media (max-width: 980px) {
+		.article-main {
+			width: min(1120px, calc(100% - 1rem));
+			padding-top: 1rem;
+		}
+
+		.article-layout.with-toc {
+			grid-template-columns: 1fr;
+		}
+
+		.toc {
+			position: static;
+			max-height: none;
+			order: -1;
+		}
+	}
+</style>

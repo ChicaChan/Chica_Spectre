@@ -1,0 +1,54 @@
+services:
+  cms:
+    image: directus/directus:11.8.0
+    container_name: astro_blog_cms
+    restart: unless-stopped
+    ports:
+      - "${DIRECTUS_PORT:-1337}:8055"
+    environment:
+      KEY: ${DIRECTUS_KEY}
+      SECRET: ${DIRECTUS_SECRET}
+      ADMIN_EMAIL: ${DIRECTUS_ADMIN_EMAIL}
+      ADMIN_PASSWORD: ${DIRECTUS_ADMIN_PASSWORD}
+      PUBLIC_URL: ${CMS_URL}
+      DB_CLIENT: sqlite3
+      DB_FILENAME: /directus/database/data.db
+      WEBSOCKETS_ENABLED: "true"
+      CORS_ENABLED: "true"
+      CORS_ORIGIN: "true"
+    volumes:
+      - directus_database:/directus/database
+      - directus_uploads:/directus/uploads
+
+  blog:
+    build:
+      context: ./site
+      dockerfile: Dockerfile
+      args:
+        SITE_URL: "${SITE_URL:-https://example.com}"
+    container_name: astro_blog_site
+    restart: unless-stopped
+    depends_on:
+      - cms
+    ports:
+      - "${ASTRO_PORT:-4321}:4321"
+    environment:
+      PUBLIC_CMS_URL: ${CMS_URL}
+      DIRECTUS_API_URL: http://cms:8055
+      DIRECTUS_ADMIN_EMAIL: ${DIRECTUS_ADMIN_EMAIL}
+      DIRECTUS_ADMIN_PASSWORD: ${DIRECTUS_ADMIN_PASSWORD}
+      ABOUT_GITHUB_URL: "${ABOUT_GITHUB_URL:-https://github.com/example}"
+      ABOUT_CONTACT_EMAIL: "${ABOUT_CONTACT_EMAIL:-hello@example.com}"
+      AI_API_KEY: ${AI_API_KEY:-}
+      AI_MODEL: "${AI_MODEL:-grok}"
+      AI_API_BASE_URL: "${AI_API_BASE_URL:-https://api.example.com/v1}"
+      AI_SYSTEM_PROMPT: "${AI_SYSTEM_PROMPT:-}"
+      NODE_ENV: production
+
+networks:
+  default:
+    name: astro-headless-blog-net
+
+volumes:
+  directus_database:
+  directus_uploads:

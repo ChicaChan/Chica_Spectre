@@ -1,0 +1,218 @@
+---
+import FormattedDate from '../components/FormattedDate.astro';
+import Layout from '../layouts/BlogPost.astro';
+import { formatPostDate, listPosts } from '../lib/cms';
+
+const latestPosts = await listPosts(3);
+const aboutGithubUrl = (process.env.ABOUT_GITHUB_URL ?? 'https://github.com/example').trim();
+const aboutContactEmail = (process.env.ABOUT_CONTACT_EMAIL ?? 'hello@example.com').trim();
+---
+
+<Layout
+	title="关于我"
+	description="博客作者的简介与联系方式"
+	pubDate={new Date('2026-03-18')}
+>
+	<section class="hero">
+		<p class="mini-title">PROFILE</p>
+		<h2>你好，我是这个博客的作者</h2>
+		<p>
+			这个页面用于展示作者简介、研究方向和对外联系方式，适合作为公开博客模板的占位内容。
+		</p>
+		<p>
+			你可以按自己的项目背景、写作方向和合作方式，替换成真正需要对外公开的信息。
+		</p>
+	</section>
+
+	<div class="widget-grid">
+		<section class="widget">
+			<h3>方向雷达</h3>
+			<ul class="chip-list">
+				<li>数据分析</li>
+				<li>市场研究</li>
+				<li>A/B 测试</li>
+				<li>机器学习</li>
+				<li>Kaggle 实战</li>
+				<li>舆情分析</li>
+			</ul>
+		</section>
+
+		<section class="widget">
+			<h3>当前状态</h3>
+			<ul class="status-list">
+				<li><span class="dot active"></span>正在完善数据分析方法库</li>
+				<li><span class="dot"></span>持续更新机器学习竞赛复盘</li>
+				<li><span class="dot"></span>尝试把研究流程产品化</li>
+			</ul>
+		</section>
+	</div>
+
+	<section class="widget">
+		<h3>近期文章</h3>
+		{
+			latestPosts.length > 0 ? (
+				<ul class="latest-list">
+					{latestPosts.map((post) => {
+						const date = formatPostDate(post);
+						return (
+							<li>
+								<a href={`/blog/${post.slug}/`}>{post.title}</a>
+								{date && (
+									<span class="date">
+										<FormattedDate date={date} />
+									</span>
+								)}
+							</li>
+						);
+					})}
+				</ul>
+			) : (
+				<p>暂无文章，正在准备中。</p>
+			)
+		}
+	</section>
+
+	<section class="widget contact">
+		<h3>联系方式</h3>
+		<p>欢迎交流技术问题、项目合作或内容共创。</p>
+		<div class="contact-actions">
+			<a href={aboutGithubUrl} target="_blank" rel="noreferrer">{aboutGithubUrl}</a>
+			<a href={`mailto:${aboutContactEmail}`}>{aboutContactEmail}</a>
+		</div>
+	</section>
+</Layout>
+
+<style>
+	.hero {
+		padding: 1rem;
+		border: 1px solid var(--border);
+		background: linear-gradient(150deg, rgba(140, 92, 245, 0.16), rgba(140, 92, 245, 0.05));
+		margin-bottom: 1rem;
+	}
+
+	.mini-title {
+		font-size: 0.76rem;
+		letter-spacing: 0.1em;
+		color: var(--success);
+		margin-bottom: 0.35rem;
+	}
+
+	.widget-grid {
+		display: grid;
+		grid-template-columns: 1fr 1fr;
+		gap: 1rem;
+		margin-bottom: 1rem;
+	}
+
+	.widget {
+		border: 1px solid var(--border);
+		background: #111422;
+		padding: 1rem;
+		margin-bottom: 1rem;
+	}
+
+	.widget h3 {
+		margin: 0 0 0.75rem;
+	}
+
+	.chip-list {
+		list-style: none;
+		padding: 0;
+		margin: 0;
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.45rem;
+	}
+
+	.chip-list li {
+		padding: 0.22rem 0.5rem;
+		border: 1px solid var(--border);
+		background: rgba(140, 92, 245, 0.13);
+		color: var(--text);
+		font-size: 0.88rem;
+	}
+
+	.status-list {
+		list-style: none;
+		padding: 0;
+		margin: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 0.6rem;
+	}
+
+	.status-list li {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		color: var(--muted);
+	}
+
+	.dot {
+		width: 0.5rem;
+		height: 0.5rem;
+		border-radius: 999px;
+		background: #7078a8;
+		flex-shrink: 0;
+	}
+
+	.dot.active {
+		background: var(--success);
+		box-shadow: 0 0 0.45rem rgba(127, 255, 212, 0.55);
+	}
+
+	.latest-list {
+		list-style: none;
+		padding: 0;
+		margin: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 0.65rem;
+	}
+
+	.latest-list li {
+		display: flex;
+		flex-direction: column;
+		padding: 0.7rem;
+		border: 1px solid var(--border);
+		background: #0f1220;
+	}
+
+	.latest-list li a {
+		color: var(--text);
+	}
+
+	.latest-list li a:hover {
+		color: var(--primary-light);
+	}
+
+	.date {
+		margin-top: 0.2rem;
+		color: var(--muted);
+		font-size: 0.85rem;
+	}
+
+	.contact-actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.6rem;
+		margin-top: 0.7rem;
+	}
+
+	.contact-actions a {
+		padding: 0.3rem 0.6rem;
+		border: 1px solid var(--border);
+		background: #121629;
+	}
+
+	.contact-actions a:hover {
+		background: rgba(140, 92, 245, 0.2);
+		text-decoration: none;
+	}
+
+	@media (max-width: 760px) {
+		.widget-grid {
+			grid-template-columns: 1fr;
+		}
+	}
+</style>

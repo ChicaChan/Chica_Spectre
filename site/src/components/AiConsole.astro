@@ -1,0 +1,741 @@
+---
+import { SITE_TITLE } from '../consts';
+
+const isAiConfigured = Boolean(
+	(process.env.AI_API_KEY ?? import.meta.env.AI_API_KEY)?.trim(),
+);
+
+const initialStatus = isAiConfigured
+	? '就绪，支持 Markdown 回复。'
+	: '未配置 AI_API_KEY，完成配置后即可启用对话。';
+---
+
+<section
+	class="card stack ai-console"
+	data-ai-console
+	data-configured={isAiConfigured ? 'true' : 'false'}
+>
+	<p class="label">AI Console</p>
+	<h1>{SITE_TITLE}</h1>
+
+	<div class="ai-toolbar">
+		<label class="ai-model-field" for="ai-model-select">
+			<span class="ai-model-label">Model</span>
+			<select id="ai-model-select" class="ai-model-select" data-model-select disabled={!isAiConfigured}>
+				<option value="grok">grok (auto)</option>
+			</select>
+		</label>
+	</div>
+
+	<div class="ai-shell">
+		<div class="ai-shell-header">
+			<span>$ blog-assistant</span>
+			<span class:list={{ 'ai-shell-state': true, ready: isAiConfigured, offline: !isAiConfigured }}>
+				{isAiConfigured ? 'online' : 'offline'}
+			</span>
+		</div>
+
+		<div class="ai-messages" data-messages>
+			<article class="ai-message assistant">
+				<span class="ai-role">assistant</span>
+				<div class="ai-content">
+					<p>我是博客助手，可以回答站点内容、最近文章和阅读建议。</p>
+				</div>
+			</article>
+		</div>
+	</div>
+
+	<form class="ai-form" data-form>
+		<label class="sr-only" for="ai-prompt">输入问题</label>
+		<textarea
+			id="ai-prompt"
+			name="prompt"
+			rows="1"
+			maxlength="1200"
+			placeholder="例如：推荐一篇关于数据分析的方法文章"
+			data-input
+			disabled={!isAiConfigured}
+		></textarea>
+		<div class="ai-actions">
+			<p class="ai-status" data-status>{initialStatus}</p>
+			<div class="ai-controls">
+				<button type="submit" class="ai-submit" data-submit disabled={!isAiConfigured}>发送</button>
+				<button type="button" class="ai-secondary ai-stop" data-stop disabled>终止</button>
+			</div>
+		</div>
+	</form>
+</section>
+
+<script>
+	import { marked } from 'marked';
+
+	marked.setOptions({
+		gfm: true,
+		breaks: true,
+	});
+
+	const root = document.querySelector('[data-ai-console]');
+
+	if (root instanceof HTMLElement && root.dataset.bound !== 'true') {
+		root.dataset.bound = 'true';
+
+		const configured = root.dataset.configured === 'true';
+		const form = root.querySelector('[data-form]');
+		const input = root.querySelector('[data-input]');
+		const submit = root.querySelector('[data-submit]');
+		const stopButton = root.querySelector('[data-stop]');
+		const messages = root.querySelector('[data-messages]');
+		const status = root.querySelector('[data-status]');
+		const modelSelect = root.querySelector('[data-model-select]');
+
+		if (
+			!(form instanceof HTMLFormElement) ||
+			!(input instanceof HTMLTextAreaElement) ||
+			!(submit instanceof HTMLButtonElement) ||
+			!(stopButton instanceof HTMLButtonElement) ||
+			!(messages instanceof HTMLElement) ||
+			!(status instanceof HTMLElement) ||
+			!(modelSelect instanceof HTMLSelectElement)
+		) {
+			throw new Error('AI 控件初始化失败。');
+		}
+
+		/** @type {Array<{
+			id: number;
+			prompt: string;
+			model: string;
+			state: 'pending' | 'completed' | 'failed' | 'aborted';
+			reply: string;
+			resolvedModel: string;
+			userMessage: HTMLElement;
+			responseMessage: HTMLElement | null;
+			editButton: HTMLButtonElement;
+			retryButton: HTMLButtonElement;
+		}>} */
+		const turns = [];
+		let busy = false;
+		let minInputHeight = 0;
+		let maxInputHeight = 0;
+		let currentController = null;
+		let turnSequence = 0;
+
+		const escapeHtml = (content) =>
+			content
+				.replaceAll('&', '&amp;')
+				.replaceAll('<', '&lt;')
+				.replaceAll('>', '&gt;')
+				.replaceAll('"', '&quot;')
+				.replaceAll("'", '&#39;');
+
+		const renderAssistantMarkdown = (content) => marked.parse(escapeHtml(content));
+
+		const buildPlainContent = (content) => {
+			const text = document.createElement('p');
+			text.className = 'ai-plain-content';
+			text.textContent = content;
+			return text;
+		};
+
+		const buildAssistantContent = (content) => {
+			const container = document.createElement('div');
+			container.className = 'ai-content';
+			container.innerHTML = renderAssistantMarkdown(content);
+			return container;
+		};
+
+		const renderContent = (role, content) =>
+			role === 'assistant' ? buildAssistantContent(content) : buildPlainContent(content);
+
+		const appendMessage = (role, content) => {
+			const item = document.createElement('article');
+			item.className = `ai-message ${role}`;
+
+			const tag = document.createElement('span');
+			tag.className = 'ai-role';
+			tag.textContent = role;
+
+			item.append(tag, renderContent(role, content));
+			messages.append(item);
+			messages.scrollTop = messages.scrollHeight;
+			return item;
+		};
+
+		const removeMessage = (message) => {
+			if (message instanceof HTMLElement) {
+				message.remove();
+			}
+		};
+
+		const createUserMessage = (prompt, turnId) => {
+			const item = document.createElement('article');
+			item.className = 'ai-message user';
+
+			const tag = document.createElement('span');
+			tag.className = 'ai-role';
+			tag.textContent = 'user';
+
+			const actions = document.createElement('div');
+			actions.className = 'ai-message-actions';
+
+			const editTurnButton = document.createElement('button');
+			editTurnButton.type = 'button';
+			editTurnButton.className = 'ai-inline-action';
+			editTurnButton.textContent = '编辑';
+
+			const retryTurnButton = document.createElement('button');
+			retryTurnButton.type = 'button';
+			retryTurnButton.className = 'ai-inline-action';
+			retryTurnButton.textContent = '重试';
+
+			actions.append(editTurnButton, retryTurnButton);
+			item.append(tag, buildPlainContent(prompt), actions);
+			messages.append(item);
+			messages.scrollTop = messages.scrollHeight;
+
+			editTurnButton.addEventListener('click', () => {
+				void editTurn(turnId);
+			});
+
+			retryTurnButton.addEventListener('click', () => {
+				void retryTurn(turnId);
+			});
+
+			return {
+				item,
+				editButton: editTurnButton,
+				retryButton: retryTurnButton,
+			};
+		};
+
+		const syncModelOptions = (models, defaultModel, resolvedModel) => {
+			const availableModels = Array.isArray(models)
+				? models.filter((model) => typeof model === 'string' && model.trim().length > 0)
+				: [];
+			const mergedModels = [];
+			const seen = new Set();
+
+			[defaultModel, ...availableModels].forEach((model) => {
+				if (typeof model !== 'string') return;
+				const value = model.trim();
+				if (!value || seen.has(value)) return;
+				seen.add(value);
+				mergedModels.push(value);
+			});
+
+			modelSelect.innerHTML = '';
+
+			mergedModels.forEach((model) => {
+				const option = document.createElement('option');
+				option.value = model;
+				option.textContent =
+					model === defaultModel && !availableModels.includes(model)
+						? `${model} (auto)`
+						: model;
+				modelSelect.append(option);
+			});
+
+			modelSelect.value = mergedModels.includes(defaultModel) ? defaultModel : mergedModels[0] ?? 'grok';
+			status.textContent = resolvedModel
+				? `就绪，当前模型：${resolvedModel}`
+				: '就绪，可以开始提问。';
+		};
+
+		const syncActionButtons = () => {
+			input.disabled = busy || !configured;
+			submit.disabled = busy || !configured;
+			modelSelect.disabled = busy || !configured;
+			stopButton.disabled = !busy;
+
+			turns.forEach((turn) => {
+				const enabled = configured && !busy && turn.state !== 'pending';
+				turn.editButton.disabled = !enabled;
+				turn.retryButton.disabled = !enabled;
+			});
+		};
+
+		const setBusy = (nextBusy) => {
+			busy = nextBusy;
+			root.dataset.busy = nextBusy ? 'true' : 'false';
+			syncActionButtons();
+		};
+
+		const setupInputHeights = () => {
+			const computed = window.getComputedStyle(input);
+			const lineHeight = Number.parseFloat(computed.lineHeight) || 24;
+			const paddingTop = Number.parseFloat(computed.paddingTop) || 0;
+			const paddingBottom = Number.parseFloat(computed.paddingBottom) || 0;
+			const borderTop = Number.parseFloat(computed.borderTopWidth) || 0;
+			const borderBottom = Number.parseFloat(computed.borderBottomWidth) || 0;
+			const chromeHeight = paddingTop + paddingBottom + borderTop + borderBottom;
+
+			minInputHeight = lineHeight + chromeHeight;
+			maxInputHeight = lineHeight * 3 + chromeHeight;
+			input.style.minHeight = `${minInputHeight}px`;
+			input.style.maxHeight = `${maxInputHeight}px`;
+		};
+
+		const resizeInput = () => {
+			input.style.height = 'auto';
+			const nextHeight = Math.max(minInputHeight, Math.min(input.scrollHeight, maxInputHeight));
+			input.style.height = `${nextHeight}px`;
+			input.style.overflowY = input.scrollHeight > maxInputHeight ? 'auto' : 'hidden';
+		};
+
+		const hasModelOption = (model) =>
+			Array.from(modelSelect.options).some((option) => option.value === model);
+
+		const applyModelSelection = (model) => {
+			if (typeof model === 'string' && model && hasModelOption(model)) {
+				modelSelect.value = model;
+			}
+		};
+
+		const buildHistory = () =>
+			turns.flatMap((turn) =>
+				turn.state === 'completed'
+					? [
+							{ role: 'user', content: turn.prompt },
+							{ role: 'assistant', content: turn.reply },
+						]
+					: [],
+			);
+
+		const rollbackTurnsFrom = (turnId) => {
+			const startIndex = turns.findIndex((turn) => turn.id === turnId);
+			if (startIndex === -1) return null;
+
+			const removedTurns = turns.splice(startIndex);
+			removedTurns.forEach((turn) => {
+				removeMessage(turn.userMessage);
+				removeMessage(turn.responseMessage);
+			});
+
+			syncActionButtons();
+			return removedTurns[0] ?? null;
+		};
+
+		const loadModels = async () => {
+			if (!configured) return;
+
+			status.textContent = '正在加载模型列表...';
+
+			try {
+				const response = await fetch('/api/ai-chat');
+				const payload = await response.json().catch(() => ({}));
+				if (!response.ok) {
+					throw new Error(
+						typeof payload.error === 'string' ? payload.error : '模型列表加载失败。',
+					);
+				}
+
+				const defaultModel =
+					typeof payload.defaultModel === 'string' && payload.defaultModel.trim()
+						? payload.defaultModel.trim()
+						: 'grok';
+				const resolvedModel =
+					typeof payload.resolvedModel === 'string' ? payload.resolvedModel.trim() : defaultModel;
+
+				syncModelOptions(payload.models, defaultModel, resolvedModel);
+			} catch (error) {
+				syncModelOptions([], 'grok', 'grok');
+				status.textContent =
+					error instanceof Error ? error.message : '模型列表加载失败，将使用默认模型。';
+			}
+		};
+
+		const sendPrompt = async (rawPrompt, options = {}) => {
+			const prompt = rawPrompt.trim();
+			if (!configured || busy || !prompt) return;
+			const selectedModel =
+				typeof options?.model === 'string' && options.model.trim()
+					? options.model.trim()
+					: modelSelect.value;
+			const turnId = ++turnSequence;
+			const userMessageParts = createUserMessage(prompt, turnId);
+			const turn = {
+				id: turnId,
+				prompt,
+				model: selectedModel,
+				state: 'pending',
+				reply: '',
+				resolvedModel: '',
+				userMessage: userMessageParts.item,
+				responseMessage: null,
+				editButton: userMessageParts.editButton,
+				retryButton: userMessageParts.retryButton,
+			};
+			turns.push(turn);
+			const controller = new AbortController();
+			const requestHistory = [...buildHistory(), { role: 'user', content: prompt }];
+
+			currentController = controller;
+			input.value = '';
+			resizeInput();
+			setBusy(true);
+			status.textContent = 'AI 正在思考...';
+
+			try {
+				const response = await fetch('/api/ai-chat', {
+					method: 'POST',
+					headers: {
+						'Content-Type': 'application/json',
+					},
+					body: JSON.stringify({
+						history: requestHistory,
+						model: selectedModel,
+					}),
+					signal: controller.signal,
+				});
+
+				const payload = await response.json().catch(() => ({}));
+				if (!response.ok) {
+					throw new Error(
+						typeof payload.error === 'string' ? payload.error : '请求失败，请稍后重试。',
+					);
+				}
+
+				const reply = typeof payload.message === 'string' ? payload.message.trim() : '';
+				if (!reply) {
+					throw new Error('AI 没有返回有效内容。');
+				}
+
+				const resolvedModel =
+					typeof payload.model === 'string' && payload.model.trim()
+						? payload.model.trim()
+						: selectedModel;
+
+				turn.state = 'completed';
+				turn.reply = reply;
+				turn.resolvedModel = resolvedModel;
+				turn.responseMessage = appendMessage('assistant', reply);
+				status.textContent = `可以继续追问，当前模型：${resolvedModel}`;
+			} catch (error) {
+				const isAbortError = error instanceof DOMException && error.name === 'AbortError';
+				const message = isAbortError
+					? '已终止本次请求。'
+					: error instanceof Error
+						? error.message
+						: '服务暂时不可用。';
+				turn.state = isAbortError ? 'aborted' : 'failed';
+				turn.responseMessage = appendMessage(
+					'system',
+					isAbortError ? '已终止本次请求。可重试，或编辑上次提问后重新发送。' : `请求失败：${message}`,
+				);
+				status.textContent = isAbortError ? '请求已终止，可重试或编辑上次提问。' : `${message}，可重试。`;
+			} finally {
+				currentController = null;
+				setBusy(false);
+				input.focus();
+			}
+		};
+
+		const editTurn = async (turnId) => {
+			if (busy) return;
+
+			const turn = rollbackTurnsFrom(turnId);
+			if (!turn) return;
+
+			applyModelSelection(turn.model);
+			input.value = turn.prompt;
+			resizeInput();
+			status.textContent = '已回到所选提问前的状态，可编辑后重新发送。';
+			input.focus();
+			input.setSelectionRange(input.value.length, input.value.length);
+		};
+
+		const retryTurn = async (turnId) => {
+			if (busy) return;
+
+			const turn = rollbackTurnsFrom(turnId);
+			if (!turn) return;
+
+			applyModelSelection(turn.model);
+			await sendPrompt(turn.prompt, { model: turn.model });
+		};
+
+		form.addEventListener('submit', async (event) => {
+			event.preventDefault();
+			await sendPrompt(input.value);
+		});
+
+		input.addEventListener('keydown', async (event) => {
+			if (event.key === 'Enter' && !event.shiftKey) {
+				event.preventDefault();
+				await sendPrompt(input.value);
+			}
+		});
+
+		input.addEventListener('input', () => {
+			resizeInput();
+		});
+
+		stopButton.addEventListener('click', () => {
+			currentController?.abort();
+		});
+
+		setupInputHeights();
+		resizeInput();
+		syncActionButtons();
+		void loadModels();
+	}
+</script>
+
+<style>
+	.ai-console {
+		min-height: 100%;
+	}
+
+	.ai-toolbar {
+		display: flex;
+		justify-content: flex-start;
+	}
+
+	.ai-model-field {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.75rem;
+		font-size: 0.88rem;
+		color: var(--muted);
+	}
+
+	.ai-model-label {
+		text-transform: uppercase;
+		letter-spacing: 0.08em;
+	}
+
+	.ai-model-select {
+		border: 1px solid var(--border);
+		background: #111422;
+		color: var(--text);
+		font: inherit;
+		padding: 0.4rem 0.7rem;
+	}
+
+	.ai-shell {
+		display: flex;
+		flex-direction: column;
+		border: 1px solid var(--border);
+		background: rgba(10, 12, 20, 0.92);
+		min-height: 32rem;
+	}
+
+	.ai-shell-header {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 1rem;
+		padding: 0.7rem 0.9rem;
+		border-bottom: 1px solid var(--border);
+		color: var(--muted);
+		font-size: 0.86rem;
+	}
+
+	.ai-shell-state {
+		text-transform: uppercase;
+		letter-spacing: 0.08em;
+	}
+
+	.ai-shell-state.ready {
+		color: var(--success);
+	}
+
+	.ai-shell-state.offline {
+		color: #ff9aa2;
+	}
+
+	.ai-messages {
+		flex: 1;
+		display: flex;
+		flex-direction: column;
+		gap: 0.75rem;
+		padding: 0.9rem;
+		min-height: 26rem;
+		max-height: 34rem;
+		overflow-y: auto;
+	}
+
+	.ai-message {
+		display: flex;
+		flex-direction: column;
+		gap: 0.4rem;
+		padding: 0.75rem;
+		border: 1px solid var(--border);
+		background: #101321;
+	}
+
+	.ai-message.user {
+		background: rgba(140, 92, 245, 0.12);
+		border-color: rgba(140, 92, 245, 0.38);
+	}
+
+	.ai-message.assistant {
+		background: rgba(127, 255, 212, 0.05);
+		border-color: rgba(127, 255, 212, 0.18);
+	}
+
+	.ai-message.system {
+		background: rgba(255, 154, 162, 0.08);
+		border-color: rgba(255, 154, 162, 0.28);
+	}
+
+	.ai-plain-content {
+		margin: 0;
+		color: var(--text);
+		white-space: pre-wrap;
+	}
+
+	.ai-content {
+		color: var(--text);
+	}
+
+	.ai-content > :first-child {
+		margin-top: 0;
+	}
+
+	.ai-content > :last-child {
+		margin-bottom: 0;
+	}
+
+	.ai-content p,
+	.ai-content li,
+	.ai-content blockquote {
+		color: var(--text);
+	}
+
+	.ai-content ul,
+	.ai-content ol {
+		margin: 0 0 1rem 1.25rem;
+		padding: 0;
+	}
+
+	.ai-content pre {
+		margin: 0.75rem 0;
+	}
+
+	.ai-content code {
+		word-break: break-word;
+	}
+
+	.ai-role {
+		font-size: 0.78rem;
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+		color: var(--muted);
+	}
+
+	.ai-message-actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.5rem;
+		margin-top: 0.15rem;
+	}
+
+	.ai-model-select,
+	.ai-inline-action,
+	.ai-secondary,
+	.ai-submit {
+		border: 1px solid var(--border);
+		background: #111422;
+		color: var(--text);
+		font: inherit;
+		cursor: pointer;
+	}
+
+	.ai-model-select:hover:not(:disabled),
+	.ai-inline-action:hover:not(:disabled),
+	.ai-secondary:hover:not(:disabled),
+	.ai-submit:hover:not(:disabled) {
+		background: rgba(140, 92, 245, 0.18);
+		border-color: rgba(140, 92, 245, 0.42);
+	}
+
+	.ai-form {
+		display: flex;
+		flex-direction: column;
+		gap: 0.8rem;
+	}
+
+	.ai-form textarea {
+		width: 100%;
+		resize: none;
+		border: 1px solid var(--border);
+		background: #0f1220;
+		color: var(--text);
+		padding: 0.85rem;
+		font: inherit;
+		line-height: 1.65;
+	}
+
+	.ai-form textarea:focus {
+		outline: 1px solid rgba(140, 92, 245, 0.52);
+		border-color: rgba(140, 92, 245, 0.52);
+	}
+
+	.ai-form textarea::placeholder {
+		color: #7680ae;
+	}
+
+	.ai-actions {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 1rem;
+	}
+
+	.ai-controls {
+		display: flex;
+		flex-wrap: wrap;
+		justify-content: flex-end;
+		gap: 0.6rem;
+	}
+
+	.ai-status {
+		margin: 0;
+		font-size: 0.9rem;
+	}
+
+	.ai-inline-action,
+	.ai-secondary,
+	.ai-submit {
+		padding: 0.45rem 0.8rem;
+		white-space: nowrap;
+	}
+
+	.ai-inline-action {
+		font-size: 0.84rem;
+	}
+
+	.ai-stop:not(:disabled) {
+		border-color: rgba(255, 154, 162, 0.32);
+		color: #ffd2d6;
+	}
+
+	.ai-model-select:disabled,
+	.ai-inline-action:disabled,
+	.ai-secondary:disabled,
+	.ai-submit:disabled,
+	.ai-form textarea:disabled {
+		cursor: not-allowed;
+		opacity: 0.55;
+	}
+
+	@media (max-width: 860px) {
+		.ai-shell {
+			min-height: 26rem;
+		}
+
+		.ai-messages {
+			min-height: 20rem;
+			max-height: 24rem;
+		}
+
+		.ai-actions {
+			flex-direction: column;
+			align-items: flex-start;
+		}
+
+		.ai-controls {
+			justify-content: flex-start;
+		}
+	}
+</style>
